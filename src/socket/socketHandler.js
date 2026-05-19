@@ -18,6 +18,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
+const sendEmail = require('../utils/sendEmail');
 
 const setupSocket = (io) => {
   // Authenticate socket connections using JWT
@@ -102,7 +103,7 @@ const setupSocket = (io) => {
         const conversation = await Conversation.findById(conversationId);
         if (conversation) {
           conversation.lastMessage = message._id;
-          conversation.participants.forEach((participantId) => {
+          conversation.participants.forEach(async (participantId) => {
             if (participantId.toString() !== socket.user._id.toString()) {
               const currentCount =
                 conversation.unreadCounts.get(participantId.toString()) || 0;
@@ -110,6 +111,20 @@ const setupSocket = (io) => {
                 participantId.toString(),
                 currentCount + 1
               );
+
+              // Send Email Notification if the user is offline
+              try {
+                const recipient = await User.findById(participantId);
+                if (recipient && !recipient.isOnline) {
+                  sendEmail({
+                    email: recipient.email,
+                    subject: `New Message from ${socket.user.name}`,
+                    message: `You have a new message on Worknoon Chat:\n\n"${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`,
+                  });
+                }
+              } catch (emailErr) {
+                console.error("Failed to trigger email notification:", emailErr);
+              }
             }
           });
           await conversation.save();
@@ -157,17 +172,21 @@ const setupSocket = (io) => {
     socket.on('disconnect', async () => {
       console.log(`🔴 User disconnected: ${socket.user.name}`);
 
-      // Mark user as offline
-      await User.findByIdAndUpdate(socket.user._id, {
-        isOnline: false,
-        lastSeen: new Date(),
-      });
+      try {
+        // Mark user as offline
+        await User.findByIdAndUpdate(socket.user._id, {
+          isOnline: false,
+          lastSeen: new Date(),
+        });
 
-      // Broadcast offline status
-      socket.broadcast.emit('user:online', {
-        userId: socket.user._id,
-        isOnline: false,
-      });
+        // Broadcast offline status
+        socket.broadcast.emit('user:online', {
+          userId: socket.user._id,
+          isOnline: false,
+        });
+      } catch (err) {
+        console.error('Error updating disconnect status:', err);
+      }
     });
 
     // Join a personal room (for receiving notifications)

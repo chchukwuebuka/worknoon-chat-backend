@@ -7,6 +7,8 @@
 
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
+const User = require('../models/User');
+const sendEmail = require('../utils/sendEmail');
 
 /**
  * @route   POST /api/messages
@@ -62,16 +64,28 @@ const sendMessage = async (req, res, next) => {
     conversation.lastMessage = message._id;
 
     // Increment unread count for all other participants
-    conversation.participants.forEach((participantId) => {
+    for (const participantId of conversation.participants) {
       if (participantId.toString() !== req.user._id.toString()) {
-        const currentCount =
-          conversation.unreadCounts.get(participantId.toString()) || 0;
-        conversation.unreadCounts.set(
-          participantId.toString(),
-          currentCount + 1
-        );
+        const pIdStr = participantId.toString();
+        const currentCount = conversation.unreadCounts.get(pIdStr) || 0;
+        conversation.unreadCounts.set(pIdStr, currentCount + 1);
+
+        // BONUS: Send Email Notification if the user is offline
+        try {
+          const recipient = await User.findById(participantId);
+          if (recipient && !recipient.isOnline) {
+            // Fire and forget to avoid blocking the response
+            sendEmail({
+              email: recipient.email,
+              subject: `New Message from ${req.user.name}`,
+              message: `You have a new message on Worknoon Chat:\n\n"${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`,
+            });
+          }
+        } catch (emailErr) {
+          console.error("Failed to trigger email notification:", emailErr);
+        }
       }
-    });
+    }
 
     await conversation.save();
 
